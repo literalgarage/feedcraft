@@ -1,0 +1,15 @@
+[project]
+name = "feedmodels"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "genbadge[coverage,tests]>=1.1.2",
+    "pyright>=1.1.406",
+    "pytest>=8.4.2",
+    "pytest-cov>=7.0.0",
+    "pytest-html>=4.1.1",
+    "pytest-watcher>=0.4.3",
+    "ruff>=0.14.1",
+]
