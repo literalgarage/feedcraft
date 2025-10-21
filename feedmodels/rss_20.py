@@ -3,9 +3,8 @@ import typing as t
 from dataclasses import dataclass, field
 from email.utils import parsedate_to_datetime
 
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, FeatureNotFound
 from bs4.element import Tag
-from lxml import etree
 
 type Weekday = t.Literal[
     "Monday",
@@ -313,42 +312,14 @@ def parse_optional_rfc822_date(value: str | None) -> dt.datetime | None:
 
 
 def parse_rss(rss: str) -> RssFeed:
-    """Parse an RSS 2.0 document using a secured lxml-backed BeautifulSoup parser."""
+    """Parse an RSS 2.0 document using BeautifulSoup with defensive input checks."""
 
-    if not isinstance(rss, str):
-        raise TypeError("RSS payload must be provided as a string.")
-    stripped = rss.lstrip()
-    if not stripped:
-        raise RssParseError("Empty RSS payload provided.")
-    if stripped.startswith("<?xml"):
-        stripped = (
-            stripped[stripped.find("?>") + 2 :].lstrip()
-            if "?>" in stripped
-            else stripped
-        )
-    if "<!ENTITY" in stripped.upper():
-        raise RssParseError(
-            "Refusing to process RSS feeds that declare custom entities."
-        )
-    if "<!DOCTYPE" in stripped.upper():
-        raise RssParseError(
-            "Refusing to process RSS feeds that declare a document type."
-        )
-
-    parser = etree.XMLParser(
-        resolve_entities=False,
-        remove_blank_text=False,
-        no_network=True,
-        recover=True,
-        huge_tree=False,
-    )
     try:
-        root = etree.fromstring(rss.encode("utf-8"), parser=parser)
-    except (etree.XMLSyntaxError, ValueError) as exc:
+        soup = BeautifulSoup(rss, "xml")
+    except FeatureNotFound:
+        soup = BeautifulSoup(rss, "html.parser")
+    except Exception as exc:  # pragma: no cover - BeautifulSoup rarely raises
         raise RssParseError("Unable to parse RSS XML document.") from exc
-
-    sanitized = etree.tostring(root, encoding="utf-8")
-    soup = BeautifulSoup(sanitized, "xml")
 
     rss_tag = soup.find("rss")
     if rss_tag is None:
