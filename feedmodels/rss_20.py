@@ -3,6 +3,10 @@ import typing as t
 from dataclasses import dataclass, field
 from email.utils import parsedate_to_datetime
 
+from bs4 import BeautifulSoup
+from bs4.element import Tag
+from lxml import etree
+
 type Weekday = t.Literal[
     "Monday",
     "Tuesday",
@@ -280,6 +284,10 @@ class RssDateError(ValueError):
     """Raised when an RSS date string cannot be parsed according to RFC 822 allowances."""
 
 
+class RssParseError(ValueError):
+    """Raised when an RSS document cannot be parsed into the expected RSS 2.0 structure."""
+
+
 def parse_rfc822_date(value: str) -> dt.datetime:
     """Parse an RFC 822 date-time string as used by RSS <pubDate> and <lastBuildDate>."""
 
@@ -302,3 +310,333 @@ def parse_optional_rfc822_date(value: str | None) -> dt.datetime | None:
     if value is None:
         return None
     return parse_rfc822_date(value)
+
+
+def parse_rss(rss: str) -> RssFeed:
+    """Parse an RSS 2.0 document using a secured lxml-backed BeautifulSoup parser."""
+
+    if not isinstance(rss, str):
+        raise TypeError("RSS payload must be provided as a string.")
+    stripped = rss.lstrip()
+    if not stripped:
+        raise RssParseError("Empty RSS payload provided.")
+    if stripped.startswith("<?xml"):
+        stripped = (
+            stripped[stripped.find("?>") + 2 :].lstrip()
+            if "?>" in stripped
+            else stripped
+        )
+    if "<!ENTITY" in stripped.upper():
+        raise RssParseError(
+            "Refusing to process RSS feeds that declare custom entities."
+        )
+    if "<!DOCTYPE" in stripped.upper():
+        raise RssParseError(
+            "Refusing to process RSS feeds that declare a document type."
+        )
+
+    parser = etree.XMLParser(
+        resolve_entities=False,
+        remove_blank_text=False,
+        no_network=True,
+        recover=True,
+        huge_tree=False,
+    )
+    try:
+        root = etree.fromstring(rss.encode("utf-8"), parser=parser)
+    except (etree.XMLSyntaxError, ValueError) as exc:
+        raise RssParseError("Unable to parse RSS XML document.") from exc
+
+    sanitized = etree.tostring(root, encoding="utf-8")
+    soup = BeautifulSoup(sanitized, "xml")
+
+    rss_tag = soup.find("rss")
+    if rss_tag is None:
+        raise RssParseError("Missing <rss> root element.")
+
+    version = rss_tag.get("version", "2.0").strip()
+
+    channel_tag = _find_direct_child(rss_tag, "channel")
+    if channel_tag is None:
+        raise RssParseError("Missing <channel> element inside <rss>.")
+
+    channel = Channel(
+        title=_require_child_text(channel_tag, "title"),
+        link=_require_child_text(channel_tag, "link"),
+        description=_require_child_text(channel_tag, "description"),
+        language=_optional_child_text(channel_tag, "language"),
+        copyright=_optional_child_text(channel_tag, "copyright"),
+        managing_editor=_optional_child_text(channel_tag, "managingEditor"),
+        web_master=_optional_child_text(channel_tag, "webMaster"),
+        pub_date=_optional_child_text(channel_tag, "pubDate"),
+        last_build_date=_optional_child_text(channel_tag, "lastBuildDate"),
+        categories=_parse_categories(channel_tag),
+        generator=_optional_child_text(channel_tag, "generator"),
+        docs=_optional_child_text(channel_tag, "docs"),
+        cloud=_parse_cloud(channel_tag),
+        ttl=_parse_int(_optional_child_text(channel_tag, "ttl")),
+        image=_parse_image(channel_tag),
+        rating=_optional_child_text(channel_tag, "rating"),
+        text_input=_parse_text_input(channel_tag),
+        skip_hours=_parse_skip_hours(channel_tag),
+        skip_days=_parse_skip_days(channel_tag),
+        items=_parse_items(channel_tag),
+    )
+
+    feed = RssFeed(channel=channel, version=version)
+    channel.validate()
+    for item in channel.items:
+        item.validate()
+    feed.validate()
+    return feed
+
+
+def _local_name(tag_name: str) -> str:
+    return tag_name.split(":", 1)[-1]
+
+
+def _find_direct_child(parent: Tag, name: str) -> Tag | None:
+    for child in parent.find_all(True, recursive=False):
+        if _local_name(child.name) == name:
+            return child
+    return None
+
+
+def _find_children(parent: Tag, name: str) -> list[Tag]:
+    matches: list[Tag] = []
+    for child in parent.find_all(True, recursive=False):
+        if _local_name(child.name) == name:
+            matches.append(child)
+    return matches
+
+
+def _get_text(node, *, strip: bool = True) -> str | None:
+    if node is None:
+        return None
+    if node.string is not None:
+        text = node.string
+    else:
+        text = node.get_text()
+    if text is None:
+        return None
+    return text.strip() if strip else text
+
+
+def _require_child_text(parent, name: str) -> str:
+    child = _find_direct_child(parent, name)
+    value = _get_text(child)
+    if value is None or not value:
+        raise RssParseError(f"Missing required <{name}> element in RSS channel.")
+    return value
+
+
+def _optional_child_text(parent, name: str) -> str | None:
+    child = _find_direct_child(parent, name)
+    return _get_text(child)
+
+
+def _parse_categories(parent) -> tuple[Category, ...]:
+    categories: list[Category] = []
+    for cat in _find_children(parent, "category"):
+        value = _get_text(cat)
+        if not value:
+            continue
+        domain = cat.get("domain")
+        categories.append(Category(value=value, domain=domain))
+    return tuple(categories)
+
+
+def _parse_cloud(parent) -> Cloud | None:
+    cloud_tag = _find_direct_child(parent, "cloud")
+    if cloud_tag is None:
+        return None
+    domain = cloud_tag.get("domain")
+    port = cloud_tag.get("port")
+    path = cloud_tag.get("path")
+    register_procedure = cloud_tag.get("registerProcedure")
+    protocol = cloud_tag.get("protocol")
+    if not all([domain, port, path, register_procedure, protocol]):
+        return None
+    try:
+        port_int = int(port)
+    except ValueError:
+        return None
+    cloud = Cloud(
+        domain=domain.strip(),
+        port=port_int,
+        path=path.strip(),
+        register_procedure=register_procedure.strip(),
+        protocol=protocol.strip(),
+    )
+    try:
+        cloud.validate()
+    except ValueError:
+        return None
+    return cloud
+
+
+def _parse_int(value: str | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value.strip())
+    except ValueError:
+        return None
+
+
+def _parse_image(parent) -> Image | None:
+    image_tag = _find_direct_child(parent, "image")
+    if image_tag is None:
+        return None
+    url = _optional_child_text(image_tag, "url")
+    title = _optional_child_text(image_tag, "title")
+    link = _optional_child_text(image_tag, "link")
+    if not all([url, title, link]):
+        return None
+    width = _parse_int(_optional_child_text(image_tag, "width")) or 88
+    height = _parse_int(_optional_child_text(image_tag, "height")) or 31
+    description = _optional_child_text(image_tag, "description")
+    image = Image(
+        url=url,
+        title=title,
+        link=link,
+        width=width,
+        height=height,
+        description=description,
+    )
+    try:
+        image.validate()
+    except ValueError:
+        return None
+    return image
+
+
+def _parse_text_input(parent) -> TextInput | None:
+    text_input_tag = _find_direct_child(parent, "textInput")
+    if text_input_tag is None:
+        return None
+    title = _optional_child_text(text_input_tag, "title")
+    description = _optional_child_text(text_input_tag, "description")
+    name = _optional_child_text(text_input_tag, "name")
+    link = _optional_child_text(text_input_tag, "link")
+    if not all([title, description, name, link]):
+        return None
+    return TextInput(title=title, description=description, name=name, link=link)
+
+
+def _parse_skip_hours(parent) -> tuple[int, ...]:
+    skip_hours_tag = _find_direct_child(parent, "skipHours")
+    if skip_hours_tag is None:
+        return tuple()
+    hours: list[int] = []
+    for hour_tag in _find_children(skip_hours_tag, "hour"):
+        value = _parse_int(_get_text(hour_tag))
+        if value is None or not 0 <= value <= 23:
+            continue
+        hours.append(value)
+    return tuple(hours)
+
+
+def _parse_skip_days(parent) -> tuple[Weekday, ...]:
+    skip_days_tag = _find_direct_child(parent, "skipDays")
+    if skip_days_tag is None:
+        return tuple()
+    valid_days: set[str] = set(t.get_args(Weekday))
+    days: list[Weekday] = []
+    for day_tag in _find_children(skip_days_tag, "day"):
+        value = _get_text(day_tag)
+        if not value:
+            continue
+        normalized = value.strip().capitalize()
+        if normalized in valid_days:
+            days.append(t.cast(Weekday, normalized))
+    return tuple(days)
+
+
+def _parse_items(parent) -> tuple[Item, ...]:
+    items: list[Item] = []
+    for item_tag in _find_children(parent, "item"):
+        title = _optional_child_text(item_tag, "title")
+        link = _optional_child_text(item_tag, "link")
+        description = _optional_child_text(item_tag, "description")
+        author = _optional_child_text(item_tag, "author")
+        comments = _optional_child_text(item_tag, "comments")
+        pub_date = _optional_child_text(item_tag, "pubDate")
+        guid = _parse_guid(item_tag)
+        enclosure = _parse_enclosure(item_tag)
+        source = _parse_source(item_tag)
+        categories = _parse_categories(item_tag)
+
+        if title is None and description is None:
+            continue
+
+        items.append(
+            Item(
+                title=title,
+                link=link,
+                description=description,
+                author=author,
+                categories=categories,
+                comments=comments,
+                enclosure=enclosure,
+                guid=guid,
+                pub_date=pub_date,
+                source=source,
+            )
+        )
+    return tuple(items)
+
+
+def _parse_guid(parent) -> Guid | None:
+    guid_tag = _find_direct_child(parent, "guid")
+    if guid_tag is None:
+        return None
+    value = _get_text(guid_tag)
+    if not value:
+        return None
+    attr = guid_tag.get("isPermaLink")
+    if attr is None:
+        is_permalink = True
+    else:
+        attr_lower = attr.strip().lower()
+        if attr_lower in {"true", "1", "yes"}:
+            is_permalink = True
+        elif attr_lower in {"false", "0", "no"}:
+            is_permalink = False
+        else:
+            is_permalink = True
+    return Guid(value=value, is_perma_link=is_permalink)
+
+
+def _parse_enclosure(parent) -> Enclosure | None:
+    enclosure_tag = _find_direct_child(parent, "enclosure")
+    if enclosure_tag is None:
+        return None
+    url = enclosure_tag.get("url")
+    length = enclosure_tag.get("length")
+    media_type = enclosure_tag.get("type")
+    if not all([url, length, media_type]):
+        return None
+    try:
+        length_int = int(length)
+    except ValueError:
+        return None
+    enclosure = Enclosure(
+        url=url.strip(), length=length_int, media_type=media_type.strip()
+    )
+    try:
+        enclosure.validate()
+    except ValueError:
+        return None
+    return enclosure
+
+
+def _parse_source(parent) -> Source | None:
+    source_tag = _find_direct_child(parent, "source")
+    if source_tag is None:
+        return None
+    url = source_tag.get("url")
+    name = _get_text(source_tag)
+    if not url or not name:
+        return None
+    return Source(name=name, url=url.strip())
