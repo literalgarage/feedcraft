@@ -5,14 +5,23 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
-    "beautifulsoup4>=4.14.2",
-    "genbadge[coverage,tests]>=1.1.2",
-    "httpx>=0.28.1",
-    "lxml>=6.0.2",
-    "pyright>=1.1.406",
-    "pytest>=8.4.2",
-    "pytest-cov>=7.0.0",
-    "pytest-html>=4.1.1",
-    "pytest-watcher>=0.4.3",
-    "ruff>=0.14.1",
+  "beautifulsoup4>=4.14.2",
+  "genbadge[coverage,tests]>=1.1.2",
+  "httpx>=0.28.1",
+  "lxml>=6.0.2",
+  "pyright>=1.1.406",
+  "pytest>=8.4.2",
+  "pytest-cov>=7.0.0",
+  "pytest-html>=4.1.1",
+  "pytest-watcher>=0.4.3",
+  "ruff>=0.14.1",
 ]
+
+
+[tool.pytest.ini_options]
+testpaths = ["feedmodels"]
+python_files = ["*_test.py"]
+
+[tool.pyright]
+include = ["feedmodels"]
+exclude = [".venv", "testdata"]
