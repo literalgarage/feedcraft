@@ -314,23 +314,6 @@ def parse_optional_rfc822_date(value: str | None) -> dt.datetime | None:
 def parse_rss(rss: str) -> RssFeed:
     """Parse an RSS 2.0 document using BeautifulSoup with defensive input checks."""
 
-    if not isinstance(rss, str):
-        raise TypeError("RSS payload must be provided as a string.")
-
-    stripped = rss.lstrip()
-    if not stripped:
-        raise RssParseError("Empty RSS payload provided.")
-
-    upper = stripped.upper()
-    if "<!DOCTYPE" in upper:
-        raise RssParseError(
-            "Refusing to process RSS feeds that declare a document type."
-        )
-    if "<!ENTITY" in upper:
-        raise RssParseError(
-            "Refusing to process RSS feeds that declare custom entities."
-        )
-
     try:
         soup = BeautifulSoup(rss, "xml")
     except FeatureNotFound:
@@ -411,19 +394,24 @@ def _get_attr(tag: Tag, name: str, *, strip: bool = True) -> str | None:
     return value.strip() if strip else value
 
 
-def _find_direct_child(parent: Tag, name: str) -> Tag | None:
-    for child in parent.find_all(True, recursive=False):
-        if _local_name(child.name) == name:
-            return child
-    return None
-
-
-def _find_children(parent: Tag, name: str) -> list[Tag]:
-    matches: list[Tag] = []
-    for child in parent.find_all(True, recursive=False):
-        if _local_name(child.name) == name:
-            matches.append(child)
+def _find_direct_children(parent: Tag, name: str) -> list[Tag]:
+    matches: list[Tag] = [
+        child
+        for child in parent.children
+        if isinstance(child, Tag) and child.name == name and child.namespace is None
+    ]
     return matches
+
+
+def _find_direct_child(parent: Tag, name: str) -> Tag | None:
+    children = _find_direct_children(parent, name)
+    if len(children) == 1:
+        return children[0]
+    elif len(children) > 1:
+        raise RssParseError(
+            f"Multiple <{name}> elements found where only one expected."
+        )
+    return None
 
 
 def _get_text(node, *, strip: bool = True) -> str | None:
@@ -441,7 +429,7 @@ def _get_text(node, *, strip: bool = True) -> str | None:
 def _require_child_text(parent, name: str) -> str:
     child = _find_direct_child(parent, name)
     value = _get_text(child)
-    if value is None or not value:
+    if value is None:
         raise RssParseError(f"Missing required <{name}> element in RSS channel.")
     return value
 
@@ -453,7 +441,7 @@ def _optional_child_text(parent, name: str) -> str | None:
 
 def _parse_categories(parent) -> tuple[Category, ...]:
     categories: list[Category] = []
-    for cat in _find_children(parent, "category"):
+    for cat in _find_direct_children(parent, "category"):
         value = _get_text(cat)
         if not value:
             continue
@@ -551,7 +539,7 @@ def _parse_skip_hours(parent) -> tuple[int, ...]:
     if skip_hours_tag is None:
         return tuple()
     hours: list[int] = []
-    for hour_tag in _find_children(skip_hours_tag, "hour"):
+    for hour_tag in _find_direct_children(skip_hours_tag, "hour"):
         value = _parse_int(_get_text(hour_tag))
         if value is None or not 0 <= value <= 23:
             continue
@@ -565,7 +553,7 @@ def _parse_skip_days(parent) -> tuple[Weekday, ...]:
         return tuple()
     valid_days: set[str] = set(t.get_args(Weekday))
     days: list[Weekday] = []
-    for day_tag in _find_children(skip_days_tag, "day"):
+    for day_tag in _find_direct_children(skip_days_tag, "day"):
         value = _get_text(day_tag)
         if not value:
             continue
@@ -577,7 +565,7 @@ def _parse_skip_days(parent) -> tuple[Weekday, ...]:
 
 def _parse_items(parent) -> tuple[Item, ...]:
     items: list[Item] = []
-    for item_tag in _find_children(parent, "item"):
+    for item_tag in _find_direct_children(parent, "item"):
         title = _optional_child_text(item_tag, "title")
         link = _optional_child_text(item_tag, "link")
         description = _optional_child_text(item_tag, "description")
