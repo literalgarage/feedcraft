@@ -271,12 +271,13 @@ class RssFeed:
     channel: Channel
     """The single <channel> element containing metadata and content entries."""
 
-    version: str = "2.0"
-    """Version attribute of the <rss> element; must be 2.0 for this specification."""
+    version: str
+    """Version attribute of the <rss> element."""
 
     def validate(self) -> None:
-        if self.version != "2.0":
-            raise ValueError("RSS 2.0 documents must declare version '2.0'.")
+        pass
+        # if self.version != "2.0":
+        #     raise ValueError("RSS 2.0 documents must declare version '2.0'.")
 
 
 class RssDateError(ValueError):
