@@ -314,6 +314,23 @@ def parse_optional_rfc822_date(value: str | None) -> dt.datetime | None:
 def parse_rss(rss: str) -> RssFeed:
     """Parse an RSS 2.0 document using BeautifulSoup with defensive input checks."""
 
+    if not isinstance(rss, str):
+        raise TypeError("RSS payload must be provided as a string.")
+
+    stripped = rss.lstrip()
+    if not stripped:
+        raise RssParseError("Empty RSS payload provided.")
+
+    upper = stripped.upper()
+    if "<!DOCTYPE" in upper:
+        raise RssParseError(
+            "Refusing to process RSS feeds that declare a document type."
+        )
+    if "<!ENTITY" in upper:
+        raise RssParseError(
+            "Refusing to process RSS feeds that declare custom entities."
+        )
+
     try:
         soup = BeautifulSoup(rss, "xml")
     except FeatureNotFound:
@@ -325,7 +342,8 @@ def parse_rss(rss: str) -> RssFeed:
     if rss_tag is None:
         raise RssParseError("Missing <rss> root element.")
 
-    version = rss_tag.get("version", "2.0").strip()
+    version_attr = _get_attr(rss_tag, "version")
+    version = version_attr if version_attr else "2.0"
 
     channel_tag = _find_direct_child(rss_tag, "channel")
     if channel_tag is None:
@@ -364,6 +382,33 @@ def parse_rss(rss: str) -> RssFeed:
 
 def _local_name(tag_name: str) -> str:
     return tag_name.split(":", 1)[-1]
+
+
+def _normalize_attr(value: t.Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    if isinstance(value, bytes):
+        try:
+            return value.decode("utf-8")
+        except Exception:
+            return value.decode("utf-8", "ignore")
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            text = _normalize_attr(item)
+            if text is not None:
+                return text
+        return None
+    return str(value)
+
+
+def _get_attr(tag: Tag, name: str, *, strip: bool = True) -> str | None:
+    raw = tag.attrs.get(name)
+    value = _normalize_attr(raw)
+    if value is None:
+        return None
+    return value.strip() if strip else value
 
 
 def _find_direct_child(parent: Tag, name: str) -> Tag | None:
@@ -412,7 +457,7 @@ def _parse_categories(parent) -> tuple[Category, ...]:
         value = _get_text(cat)
         if not value:
             continue
-        domain = cat.get("domain")
+        domain = _get_attr(cat, "domain")
         categories.append(Category(value=value, domain=domain))
     return tuple(categories)
 
@@ -421,23 +466,29 @@ def _parse_cloud(parent) -> Cloud | None:
     cloud_tag = _find_direct_child(parent, "cloud")
     if cloud_tag is None:
         return None
-    domain = cloud_tag.get("domain")
-    port = cloud_tag.get("port")
-    path = cloud_tag.get("path")
-    register_procedure = cloud_tag.get("registerProcedure")
-    protocol = cloud_tag.get("protocol")
-    if not all([domain, port, path, register_procedure, protocol]):
+    domain = _get_attr(cloud_tag, "domain")
+    port_text = _get_attr(cloud_tag, "port")
+    path = _get_attr(cloud_tag, "path")
+    register_procedure = _get_attr(cloud_tag, "registerProcedure")
+    protocol = _get_attr(cloud_tag, "protocol")
+    if (
+        domain is None
+        or port_text is None
+        or path is None
+        or register_procedure is None
+        or protocol is None
+    ):
         return None
     try:
-        port_int = int(port)
+        port_int = int(port_text)
     except ValueError:
         return None
     cloud = Cloud(
-        domain=domain.strip(),
+        domain=domain,
         port=port_int,
-        path=path.strip(),
-        register_procedure=register_procedure.strip(),
-        protocol=protocol.strip(),
+        path=path,
+        register_procedure=register_procedure,
+        protocol=protocol,
     )
     try:
         cloud.validate()
@@ -462,7 +513,7 @@ def _parse_image(parent) -> Image | None:
     url = _optional_child_text(image_tag, "url")
     title = _optional_child_text(image_tag, "title")
     link = _optional_child_text(image_tag, "link")
-    if not all([url, title, link]):
+    if url is None or title is None or link is None:
         return None
     width = _parse_int(_optional_child_text(image_tag, "width")) or 88
     height = _parse_int(_optional_child_text(image_tag, "height")) or 31
@@ -490,7 +541,7 @@ def _parse_text_input(parent) -> TextInput | None:
     description = _optional_child_text(text_input_tag, "description")
     name = _optional_child_text(text_input_tag, "name")
     link = _optional_child_text(text_input_tag, "link")
-    if not all([title, description, name, link]):
+    if title is None or description is None or name is None or link is None:
         return None
     return TextInput(title=title, description=description, name=name, link=link)
 
@@ -565,11 +616,11 @@ def _parse_guid(parent) -> Guid | None:
     value = _get_text(guid_tag)
     if not value:
         return None
-    attr = guid_tag.get("isPermaLink")
+    attr = _get_attr(guid_tag, "isPermaLink")
     if attr is None:
         is_permalink = True
     else:
-        attr_lower = attr.strip().lower()
+        attr_lower = attr.lower()
         if attr_lower in {"true", "1", "yes"}:
             is_permalink = True
         elif attr_lower in {"false", "0", "no"}:
@@ -583,18 +634,16 @@ def _parse_enclosure(parent) -> Enclosure | None:
     enclosure_tag = _find_direct_child(parent, "enclosure")
     if enclosure_tag is None:
         return None
-    url = enclosure_tag.get("url")
-    length = enclosure_tag.get("length")
-    media_type = enclosure_tag.get("type")
-    if not all([url, length, media_type]):
+    url = _get_attr(enclosure_tag, "url")
+    length_text = _get_attr(enclosure_tag, "length")
+    media_type = _get_attr(enclosure_tag, "type")
+    if url is None or length_text is None or media_type is None:
         return None
     try:
-        length_int = int(length)
+        length_int = int(length_text)
     except ValueError:
         return None
-    enclosure = Enclosure(
-        url=url.strip(), length=length_int, media_type=media_type.strip()
-    )
+    enclosure = Enclosure(url=url, length=length_int, media_type=media_type)
     try:
         enclosure.validate()
     except ValueError:
@@ -606,8 +655,8 @@ def _parse_source(parent) -> Source | None:
     source_tag = _find_direct_child(parent, "source")
     if source_tag is None:
         return None
-    url = source_tag.get("url")
+    url = _get_attr(source_tag, "url")
     name = _get_text(source_tag)
     if not url or not name:
         return None
-    return Source(name=name, url=url.strip())
+    return Source(name=name, url=url)
