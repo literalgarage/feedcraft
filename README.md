@@ -1,6 +1,6 @@
 # Feedcraft
 
-**WARNING**: This is extremely preliminary code. You should probably not use it for anything at the moment. But let me know if you are interested in helping out!
+**WARNING**: This is extremely preliminary code. You should not use it for _any reason_. But if you're interested in helping out, please do say hello!
 
 Feedcraft is a modern, typed, deeply tested RSS, ATOM, and JSON Feed parser and generator library for Python.
 
