@@ -1,6 +1,6 @@
 [project]
-name = "feedmodels"
-version = "0.1.0"
+name = "feedcraft"
+version = "0.0.1"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.14"
@@ -20,9 +20,9 @@ dependencies = [
 
 
 [tool.pytest.ini_options]
-testpaths = ["feedmodels"]
+testpaths = ["feedcraft"]
 python_files = ["*_test.py"]
 
 [tool.pyright]
-include = ["feedmodels"]
+include = ["feedcraft"]
 exclude = [".venv", "testdata"]

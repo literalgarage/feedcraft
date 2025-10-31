@@ -2,7 +2,7 @@ from pathlib import Path
 
 import click
 
-from feedmodels.rss import parse_rss
+from feedcraft.rss import parse_rss
 
 
 @click.group()
@@ -51,7 +51,7 @@ def parse_dir(feed_dir_path: Path):
 
             if not _is_feed_any_rss(feed_content):
                 click.echo(
-                    f"[{i + 1}] Skipping {feed_file.name}: Not a valid RSS feed.",
+                    f"[{i + 1}] {feed_file.name}: not a valid RSS feed",
                     err=True,
                 )
                 continue
@@ -59,8 +59,8 @@ def parse_dir(feed_dir_path: Path):
             try:
                 feed = parse_rss(feed_content)
             except Exception as e:
-                click.echo(f"[{i + 1}] Error parsing {feed_file.name}: {e}", err=True)
-                raise
+                click.echo(f"[{i + 1}] Error parsing {feed_file}: {str(e)}", err=True)
+                continue
 
             click.echo(
                 f"\n\n-------\n\n[{i + 1}]\nFeed Title: {feed.channel.title} (from {feed_file.name})"
